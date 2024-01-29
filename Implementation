@@ -1,0 +1,669 @@
+##### GPLAKE_R DAY 4 ANSWERS ##### SENSITIVITY + CALIBRATION # ***************
+library(deSolve)
+#First make a copy of the script you created on Day 2
+ParmsGPLakeR <- function(
+    Pload = 2, # Areal P loading (mg P.m-2.d-1)
+    z = 2, # Depth (m)
+    D = 0.01, # Dilution rate (d-1)
+    Rmacr = 0.004, # Macrophyte nutrient retention rate (d-1)
+    Rphyt = 0.01, # Phytoplankton nutrient retention rate (d-1)
+    Mmacr = 250, # Areal P content of macrophytes at equilibrium during light-limitation (mg P.m-2)
+    Mphyt = 250, # Areal P content of phytoplankton at equilibrium during light-limitation (mg P.m-2)
+    Gmacr = 0.1, # Maximum per capita growth rate of macrophytes (d-1)
+    Gphyt = 0.1, # Maximum per capita growth rate of phytoplankton (d-1)
+    Hmacrnutr = 0.01, # Half-saturation constant of nutrient limitation of macrophytes (mg P.m-3)
+    Hphytnutr = 0.1, # Half-saturation constant of nutrient limitation of phytoplankton (mg P.m-3)
+    Pcrit = 70, # Critical turbidity (mg P.m-2)
+    nIntlog = 3, # Parameter in intlog function (-)
+    nHill = 30, # Parameter in Hill function (-)
+    inocmacr = 0.000001, # Inoculum of macrophytes (mg P.m-2)
+    inocphyt = 0.000001, # Inoculum of phytoplankton (mg P.m-2)
+    inocratemacr = 0.000001, # Inoculum rate of macrophytes (mg P.m-2.d-1)
+    inocratephyt = 0.000001 # Inoculum rate of phytoplankton (mg P.m-2.d-1)
+) {
+  
+  # Gather function arguments in a named vector
+  y <- c(Pload = Pload,
+         z = z,
+         D = D,
+         Rmacr = Rmacr,
+         Rphyt = Rphyt,
+         Mmacr = Mmacr,
+         Mphyt = Mphyt,
+         Gmacr = Gmacr,
+         Gphyt = Gphyt,
+         Hmacrnutr = Hmacrnutr,
+         Hphytnutr = Hphytnutr,
+         Pcrit = Pcrit,
+         nIntlog = nIntlog,
+         nHill = nHill,
+         inocmacr = inocmacr,
+         inocphyt = inocphyt,
+         inocratemacr = inocratemacr,
+         inocratephyt = inocratephyt)
+  
+  # Return
+  return(y)
+}
+
+InitGPLakeR <- function(
+    sPmacr = 250, # Areal P content of macrophytes (mg P.m-2)
+    sPphyt = 0, # Areal P content of phytoplankton (mg P.m-2)
+    sPwater = 0 # (Free) P concentration in the water (mg P.m-3)
+) {
+  
+  # Gather initial conditions in a named vector; given names are names for the state variables in the model
+  y <- c(sPmacr = sPmacr,
+         sPphyt = sPphyt,
+         sPwater = sPwater)
+  
+  # Return
+  return(y)
+}
+
+RatesGPLakeR <- function(t, y, parms) {
+  # use the with() function to be able to access the parameters and states easily
+  # remember that the with() function is with(data, expr), where
+  # - 'data' is ideally a list with named elements
+  #   thus: 'y' and 'parms' are combined using function c and converted using function as.list
+  # - 'expr' is an expression (i.e. code) that is evaluated
+  #   this can span multiple lines of code when embraced with curly brackets {}
+  with(
+    as.list(c(y, parms)),{
+      
+      ### Optional: forcing functions: get value of the driving variables at time t (if any)
+      
+      ### Optional: auxiliary equations
+      Pwater <- max(sPwater, 0)
+      LRmacr <- Mmacr * ( 1 - log(exp(nIntlog * (1 - Pload / (Rmacr * Mmacr))) + 1) / log(exp(nIntlog) + 1))
+      LRphyt <- Mphyt * (1 - log(exp(nIntlog * (1 - Pload / ((Rphyt + D) * Mphyt))) + 1) / log(exp(nIntlog) + 1))
+      State <- Pcrit ^ nHill / (Pcrit ^ nHill + sPphyt ^ nHill)
+      Pmacreq <- LRmacr * State
+      Pphyteq <- min(max(((Pload - Rmacr * sPmacr) / (Rphyt + D)),0),LRphyt) * State + LRphyt * (1 - State)
+      Pwatereq <- ((Pload - (Rphyt + D) * LRphyt) / (z * D)) * (1 - State)
+      Macrnutrlim <- Pwater / (Hmacrnutr + Pwater)
+      Phytnutrlim <- Pwater / (Hphytnutr + Pwater)
+      Hmacrdens <- Rmacr / (Gmacr - Rmacr) # H for density dependence of macrophytes
+      Hphytdens <- (Rphyt + D) / (Gphyt - (Rphyt + D)) # H for density dependence of phytoplankton
+      Macrdenslim <- Hmacrdens / (Hmacrdens + sPmacr / (Pmacreq + inocmacr))
+      Phytdenslim <- Hphytdens / (Hphytdens + sPphyt / (Pphyteq + inocphyt))
+      GRmacr <- Gmacr * Macrnutrlim * Macrdenslim
+      GRphyt <- Gphyt * Phytnutrlim * Phytdenslim
+      
+      # Rate equations
+      dPmacr <- inocratemacr + GRmacr * sPmacr - Rmacr * sPmacr
+      dPphyt <- inocratephyt + GRphyt * sPphyt - (Rphyt + D) * sPphyt
+      dPwater <- (Pload - GRmacr * sPmacr - GRphyt * sPphyt) / z - D * Pwater
+      
+      ### Gather all rates of change in a vector
+      # - the rates should be in the same order as the states (as specified in 'y')
+      # - it can be a named vector, but does not need to be
+      RATES <- c(dPmacr = dPmacr,
+                 dPphyt = dPphyt,
+                 dPwater = dPwater)
+      
+      ### Optional: get in/out flow used to compute mass balances (or set MB <- NULL)
+      # not included here (thus here use MB <- NULL), see template 3
+      MB <- NULL
+      
+      ### Optional: gather auxiliary variables that should be returned (or set AUX <- NULL)
+      # - this should be a named vector or list!
+      AUX <- NULL
+      
+      # Return result as a list
+      # - the first element is a vector with the rates of change (in the same order as 'y')
+      # - all other elements are (optional) extra output, which should be named
+      outList <- list(c(RATES, # the rates of change of the state variables (same order as 'y'!)
+                        MB),   # the rates of change of the mass balance terms (or NULL)
+                      AUX) # optional additional output per time step
+      return(outList)
+    })
+}
+
+# We can see of the effect(?) of the change in the amount of nutrient (P). 
+states <- ode(y = InitGPLakeR(),
+              times = seq(from = 0, to = 2000, by = 1),
+              func = RatesGPLakeR,
+              parms = ParmsGPLakeR(Pload = 2), #### one paramter of interest here. 
+              method = "ode45")
+statesHI <- ode(y = InitGPLakeR(),
+                times = seq(from = 0, to = 2000, by = 1),
+                func = RatesGPLakeR,
+                parms = ParmsGPLakeR(Pload = 1.1*2), #### Fast way!!!! 
+                method = "ode45")
+statesLO <- ode(y = InitGPLakeR(),
+                times = seq(from = 0, to = 2000, by = 1),
+                func = RatesGPLakeR,
+                parms = ParmsGPLakeR(Pload = 0.9*2),
+                method = "ode45")
+
+plot(states, statesHI, statesLO)
+
+
+# Where the black line is the default value for Pload, the red line is the high 
+# value (10% increase), and the green line shows the simulation for the value 
+# reduced by 10%.
+                                                                                     
+#We can now calculate the sensitivity index (SI) and elasticity index (EI) of the 
+#parameter Pload on state sPmacr at the end of the simulation:
+
+deltaState = statesHI[nrow(statesHI),"sPmacr"] - statesLO[nrow(statesHI),"sPmacr"]
+deltaParm = 0.1*2
+SI <- deltaState / (2*deltaParm)
+SI ### My R does not get the same as the in the answers, again... did a mistkae in the implementation... 
+
+EI <- (deltaState/states[nrow(states),"sPmacr"]) / ((2*deltaParm) / 2)
+EI ### Kind of coincide with what I found --> standardized but not with the Answers. 
+
+# This approach can be repeated for the other parameters and both state variables.
+# Repeating the same procedure for all parameters and all state variables yields 
+# the following elasticity indices ..... 
+
+### Settings for sensitivity analysis
+
+# integration settings
+inits <- InitGPLakeR()
+parms <- ParmsGPLakeR()
+times <- seq(from = 0, to = 2000, by = 1)
+method <- "ode45"
+
+# Specify the parameters to compute sensitivity indices for
+sensiParms <- names(parms) # this can be a subset of all parameters
+
+# Set the fraction by which each parameter is decreased/increased during sensitivity analysis
+changeFraction <- 0.1 # 10%
+
+# Set the time at which we want to evaluate the values of the state variables
+evalTime <- max(times) # this can be e.g. max(times): it can also be other times, but MUST occur in 'times'!
+
+# Set the name of the state variable for which we want to compute the sentitivity index
+stateName <- "sPmacr"
+
+
+######  PERFORM SENSITIVITY ANALYSIS ######################
+
+# Create data.frame to hold the output for each state in "sensiParms" and time in 
+#"evalTime" (stateDiff)
+stateDiff <- data.frame(time = evalTime)
+stateDiff[,stateName]  <- NA # Column for the value of the state given the unchanged parameters
+stateDiff[,sensiParms] <- NA # Column(s) for the difference in state values given changes in parameters
+
+# Create empty vectors to hold the parameter differences (parmDiff)
+parmDiff <- parms[sensiParms] # this makes of copy of the named parameter vector
+parmDiff[]  <- NA # This sets all elements within the vector to value NA
+
+# Update the times vector with the value of evalTime (so that any evalTime is possible)
+times <- sort(unique(c(times, evalTime)))
+
+# In a 'for'-loop with iterator "i" (which values specfied by 'sensiParms'):
+# - create 2 copies of 'parms': called 'paramsLo' and 'paramsHi'
+# - reduce the value of the i-th parameter in paramsLo with 'changeFraction'
+# - increase the value of the i-th parameter in paramsHi with 'changeFraction'
+# - solve the ODE model for both parameter sets (they are identical except for the i-th parameter)
+# - get the values of the state after 'evalTime' time units and store the difference in 'stateDiff'
+# - store the difference between the elevated and reduced parameter value in 'parmDiff'
+for(i in sensiParms) {
+  # Create copies of parms
+  paramsLo <- parms
+  paramsHi <- parms
+  
+  # Reduce/increase the value of the i-th parameter
+  paramsLo[i] <- (1 - changeFraction) * parms[i]
+  paramsHi[i] <- (1 + changeFraction) * parms[i]
+  
+  # Solve the ODE model for both sets of parameters
+  states_lo <- ode(y = inits,
+                   times = times,
+                   parms = paramsLo,
+                   func = RatesGPLakeR, ## all the paramters included. 
+                   method = method)
+  states_hi <- ode(y = inits,
+                   times = times,
+                   parms = paramsHi,
+                   func = RatesGPLakeR,
+                   method = method)
+  
+  # Retrieve the values of the state variable at evalTime time units
+  subsetLo <- subset(as.data.frame(states_lo), time %in% evalTime)[[stateName]]
+  subsetHi <- subset(as.data.frame(states_hi), time %in% evalTime)[[stateName]]
+  
+  # Compute the differences and store in stateDiff
+  stateDiff[,i] <- subsetHi - subsetLo
+  
+  # Store the difference between the elevated and reduced parameter value in the i-th element of parmDiff
+  parmDiff[i] <- paramsHi[i] - paramsLo[i]
+}
+
+# Add the value of the state variable given the (unchanged!) parameter values
+states <- ode(y = inits,
+              times = times,
+              parms = parms,
+              func = RatesGPLakeR,
+              method = method)
+stateDiff[,stateName] <- subset(as.data.frame(states), time %in% evalTime)[[stateName]]
+
+### Compute sensitivity indices
+SI <- stateDiff  # make copy of data.frame stateDiff
+for(i in sensiParms) {
+  SI[,paste("SI_d",i,sep="_")] <- stateDiff[,i] / parmDiff[i] # add index as new column
+}
+
+SI
+
+# We can also calculate the elasticity indices, rounded to 5 digits and sorted on 
+# decreasing absolute value:
+
+Es <- parms[sensiParms] / SI$sPmacr * SI[,paste("SI_d",sensiParms,sep="_")]
+Es <- as.numeric(Es)
+names(Es) <- sensiParms
+round(Es[order(abs(Es),decreasing=TRUE)],5)
+
+# We could use a barplot to show the elasticities
+par(mfrow= c(1,1))
+barplot(Es, col = 1:8, beside = TRUE)
+legend(x="topright", horiz=FALSE, bty="n", legend=names(Es), pch=22, cex=0.7, col=1:8)
+
+### SISIIIIIIII le graph !!!! 
+
+#To include a TIME-VARYING PARAMETER Pload, we can use the approxfun function to 
+# create a forcing function that can be used within the RatesGPLakeR function 
+# to interpolate the value of Pload. First create a data.frame with the columns 
+# time (values 0, 5000, 15000 and 25000) and Pload (values 0.05, 0.05, 5 and 0.05)
+
+Ploaddf <- data.frame(time = c(0, 5000, 15000, 25000),
+                      Pload = c(0.05, 0.05, 5, 0.05))
+Ploaddf
+
+# Using the data.frame Ploadf we can now create the forcing function, and test it 
+# by plotting:
+Pload_forcingfunction <- approxfun(x = Ploaddf$time, y = Ploaddf$Pload, method = "linear", rule = 2)
+plot(0:25000, Pload_forcingfunction(0:25000), type = "l", xlab = "time", ylab = "Pload")
+
+# Makes sense given the data.frame Ploaddf we just created. 
+
+# Now, we can update the RatesGPLakeR function (let’s create a copy to call it RatesGPLakeRforcing), 
+# to include the forcing function Pload_forcingfunction that will be evaluated at 
+# time t to compute parameter Pload. The computed value for Pload is also returned 
+# as an auxiliary variable
+
+RatesGPLakeRforcing <- function(t, y, parms) {
+  # use the with() function to be able to access the parameters and states easily
+  # remember that the with() function is with(data, expr), where
+  # - 'data' is ideally a list with named elements
+  #   thus: 'y' and 'parms' are combined using function c and converted using function as.list
+  # - 'expr' is an expression (i.e. code) that is evaluated
+  #   this can span multiple lines of code when embraced with curly brackets {}
+  with(
+    as.list(c(y, parms)),{
+      
+      ### Optional: forcing functions: get value of the driving variables at time t (if any)
+      Pload <- Pload_forcingfunction(t) # gotta be the same name as the one found
+                                        # int he follwoingb AUX equations. 
+      
+      ### Optional: auxiliary equations
+      Pwater <- max(sPwater, 0)
+      LRmacr <- Mmacr * ( 1 - log(exp(nIntlog * (1 - Pload / (Rmacr * Mmacr))) + 1) / log(exp(nIntlog) + 1))
+      LRphyt <- Mphyt * (1 - log(exp(nIntlog * (1 - Pload / ((Rphyt + D) * Mphyt))) + 1) / log(exp(nIntlog) + 1))
+      State <- Pcrit ^ nHill / (Pcrit ^ nHill + sPphyt ^ nHill)
+      Pmacreq <- LRmacr * State
+      Pphyteq <- min(max(((Pload - Rmacr * sPmacr) / (Rphyt + D)),0),LRphyt) * State + LRphyt * (1 - State)
+      Pwatereq <- ((Pload - (Rphyt + D) * LRphyt) / (z * D)) * (1 - State)
+      Macrnutrlim <- Pwater / (Hmacrnutr + Pwater)
+      Phytnutrlim <- Pwater / (Hphytnutr + Pwater)
+      Hmacrdens <- Rmacr / (Gmacr - Rmacr) # H for density dependence of macrophytes
+      Hphytdens <- (Rphyt + D) / (Gphyt - (Rphyt + D)) # H for density dependence of phytoplankton
+      Macrdenslim <- Hmacrdens / (Hmacrdens + sPmacr / (Pmacreq + inocmacr))
+      Phytdenslim <- Hphytdens / (Hphytdens + sPphyt / (Pphyteq + inocphyt))
+      GRmacr <- Gmacr * Macrnutrlim * Macrdenslim
+      GRphyt <- Gphyt * Phytnutrlim * Phytdenslim
+      
+      # Rate equations
+      dPmacr <- inocratemacr + GRmacr * sPmacr - Rmacr * sPmacr
+      dPphyt <- inocratephyt + GRphyt * sPphyt - (Rphyt + D) * sPphyt
+      dPwater <- (Pload - GRmacr * sPmacr - GRphyt * sPphyt) / z - D * Pwater
+      
+      ### Gather all rates of change in a vector
+      # - the rates should be in the same order as the states (as specified in 'y')
+      # - it can be a named vector, but does not need to be
+      RATES <- c(dPmacr = dPmacr,
+                 dPphyt = dPphyt,
+                 dPwater = dPwater)
+      
+      ### Optional: get in/out flow used to compute mass balances (or set MB <- NULL)
+      # not included here (thus here use MB <- NULL), see template 3
+      MB <- NULL
+      
+      ### Optional: gather auxiliary variables that should be returned (or set AUX <- NULL)
+      # - this should be a named vector or list!
+      AUX <- c(Pload = Pload) 
+      
+      # Return result as a list
+      # - the first element is a vector with the rates of change (in the same order as 'y')
+      # - all other elements are (optional) extra output, which should be named
+      outList <- list(c(RATES, # the rates of change of the state variables (same order as 'y'!)
+                        MB),   # the rates of change of the mass balance terms (or NULL)
+                      AUX) # optional additional output per time step
+      return(outList)
+    })
+}
+
+
+# Now, we can solve this model with the initial values sPmacr = 250, sPphyt = 0, 
+# sPwater = 0, and the parameter D = 0.01 (all others at their default values) for 
+# 25000 time-steps (note that this may take a little while)
+
+statesPload1 <- ode(y = InitGPLakeR(sPmacr = 5, sPphyt = 0, sPwater = 0),
+                    times = seq(from = 0, to = 25000, by = 1),
+                    parms = ParmsGPLakeR(D = 0.01),
+                    func = RatesGPLakeRforcing,
+                    method = "ode45")
+plot(statesPload1)
+# super similar to what I got.
+
+plot(statesPload1[,"Pload"], statesPload1[,"sPmacr"], xlab = "Pload", 
+     ylab = "sPmacr", type = "l") #????? 
+
+###### IMPORTANT !!!!!!
+#### In such a plot, we can see that the system has alternative stable states: 
+# with increasing P loading, the lake can stay in a clear and vegetated state 
+# for quite long, up to a point where P loading becomes too high (ca. 2.3) so 
+# that the lake suddenly switches to a turbid state without vegetation (the state 
+# sPmacr does not become mathematically 0, but it will become very low). After 
+# this switching point, when we reduce P loading, the system does not suddenly 
+# switch back at the same level of P loading: it has to drop to a lower value 
+#(ca. 1.8) before the system switches back to a clear and vegetation state.
+
+# How come we coudl plot these 2 equilibria at once???
+
+## --> the forcing function is initially used to create a time varying parameter 
+# Pload the states variables is thus reaching providing a different
+
+
+##################### CALIBRATION #####################
+setwd("/Users/sacharoland/Desktop/WUR/Models for Ecological Systems/Mini Model")
+dat <- read.csv("GPLakeR.csv")
+
+head(dat)
+
+# We see the values of the state variables at time 0, so assume that these are 
+# the initial values of the states, to be used below in the simulation of the models:
+
+inits = c(sPmacr = 48.31, sPphyt = 37.80, sPwater = 138.36)
+
+# Let’s first simulate the model with default parameter values and these initial 
+# state value, and check how well the modelled predictions for “sPmacr” agree with 
+# the measured values for state “sPmacr”
+
+#### PREDICTIONS VS MEASURED VALUES 
+# Simulate with default parameter values
+states <- ode(y = inits,
+              times = seq(from = 0, to = max(dat$time), by = 1),
+              parms = ParmsGPLakeR(),
+              func = RatesGPLakeR,
+              method = "ode45")
+# Plot
+par(mfrow= c(1,1))
+plot(states[,"time"], states[,"sPmacr"], type="l", xlab="Time", ylab="State sPmacr", 
+      ylim=c(0,250))
+points(dat$time, dat$sPmacr, pch=16)
+
+# In order to calibrate the model, we first have to define a few functions 
+# (predictionError, predRMSE, transformParameters and calibrateParameters) that 
+# allow us to do the calibration. These functions can be found in template 6. 
+
+# Note that we do not have to fill something in here: we only are defining these
+# functions as is, and later when we call (use) these functions we have to supply 
+# them with the appropriate inputs
+
+# Define a function that computes prediction errors
+# NOTE: nothing needs to be filled in here, so this function can be used as-is
+# (unless there is a need to change it, e.g. change the solver method, or include events etc.)
+predictionError <- function(p,          # the parameters
+                            y0,         # the initial conditions
+                            fn,         # the function with rate equation(s)
+                            name,       # the name of the state parameter
+                            obs_values, # the measured state values
+                            obs_times,  # the time-points of the measured state values
+                            out_time = obs_times    # the times for which we want output.
+                            # here by default the same as the input given to obs_times
+) {
+  # Get out_time vector to retrieve predictions for (combining 'obs_times' and 'out_time')
+  out_time <- unique(sort(c(obs_times, out_time)))
+  
+  # Solve the model to get the prediction
+  pred <- ode(y = y0,
+              times = out_time,
+              func = fn,
+              parms = p,
+              method = "ode45")
+  # NOTE: in case of a 'stiff' problem, method "ode45" might result in an error that the max nr of
+  # iterations is reached. Using method "rk4" (fixed timestep 4th order Runge-Kutta) might solve this.
+  
+  # Get predictions for our specific state, at times t
+  pred_t <- subset(pred, time %in% obs_times, select = name)
+  
+  # if(ncol(pred_t))
+  # , drop = TRUE)
+  
+  # Compute errors, err: prediction - obs
+  err <- pred_t - obs_values
+  
+  # Return
+  return(err)
+}
+
+
+# Define a function that computes the Root Mean Squared Error, RMSE
+# NOTE: nothing needs to be filled in here, so this function can be used as-is
+predRMSE <- function(...) { # NOTE: these ... are ellipsis, so DO NOT fill in something here!
+  # Get prediction errors
+  err <- predictionError(...) # NOTE: these ... are ellipsis, so DO NOT fill in something here!
+  
+  # Compute the measure of model fit (here the Root Mean Squared Error)
+  RMSE <- sqrt(mean(err^2))
+  
+  # Return the measure of model fit
+  return(RMSE)
+}
+
+# Define a function that allows for transformation and back-transformation
+# NOTE: nothing needs to be filled in here, so this function can be used as-is
+transformParameters <- function(parm, trans, rev = FALSE) {
+  # Check transformation vector
+  trans <- match.arg(trans, choices = c("none","logit","log"), several.ok = TRUE)
+  
+  # Get transformation function per parameter
+  if(rev == TRUE) {
+    # Back-transform from real scope to parameter scope
+    transfun <- sapply(trans, switch,
+                       "none" = mean,
+                       "logit" = plogis,
+                       "log" = exp)
+  }else {
+    # Transform from parameter scope to real scope
+    transfun <- sapply(trans, switch,
+                       "none" = mean,
+                       "logit" = qlogis,
+                       "log" = log)
+  }
+  
+  # Apply transformation function
+  y <- mapply(function(x, f){f(x)}, parm, transfun)
+  
+  # Return
+  return(y)
+}
+
+
+# Define a function that performs the calibration of specified parameters
+# NOTE: nothing needs to be filled in here, so this function can be used as-is
+calibrateParameters <- function(par,  # parameters
+                                init, # initial state values
+                                fun,  # function that returns the rates of change
+                                stateCol, # name of the state variable
+                                obs,  # observed values of the state variable
+                                t,    # timepoints of the observed state values
+                                calibrateWhich, # names of the parameters to calibrate
+                                transformations, # transformation per calibration parameter
+                                times = t, # times for which we want output of the model
+                                ... # NOTE: these ... are ellipsis, so DO NOT fill in something here!
+                                # these are the optional extra arguments past on to optim()
+) {
+  # checks
+  calibrateWhich <- match.arg(calibrateWhich, choices = names(par), several.ok = TRUE)
+  
+  # Transform parameters
+  par <- transformParameters(parm = par, trans = transformations, rev = FALSE)
+  
+  # Get parameters to be estimated
+  par_fit <- par[calibrateWhich]
+  
+  # Specify the cost function: the function that will be optimized for the parameters to be estimated
+  costFunction <- function(parm_optim, parm_all, 
+                           init, fun, stateCol, obs, t,
+                           times = t,
+                           optimNames = calibrateWhich,
+                           transf = transformations,
+                           ... # NOTE: these ... are ellipsis, so DO NOT fill in something here!
+  ) {
+    # Gather parameters (those that are and are not to be estimated)
+    par <- parm_all
+    par[optimNames] <- parm_optim[optimNames]
+    
+    # Back-transform
+    par <- transformParameters(parm = par, trans = transf, rev = TRUE)
+    
+    # Get RMSE
+    y <- predRMSE(p = par, y0 = init, fn = fun, 
+                  name = stateCol, obs_values = obs, obs_times = t, 
+                  out_time = times)
+    
+    # Return
+    return(y)
+  }
+  
+  # Fit using optim
+  fit <- optim(par = par_fit,
+               fn =  costFunction,
+               parm_all = par, 
+               init = init, 
+               fun = fun,
+               stateCol = stateCol,
+               obs = obs,
+               t = t,
+               times = times,
+               ...) # NOTE: these ... are ellipsis, so DO NOT fill in something here!
+  # These are the optional additional arguments passed on to optim()
+  
+  # Gather parameters: all parameters updated with those that are estimated
+  y <- par
+  y[calibrateWhich] <- fit$par[calibrateWhich]
+  
+  # Back-transform
+  y <- transformParameters(parm = y, trans = transformations, rev = TRUE)
+  
+  # put all (constant and estimated) parameters back in $par
+  fit$par <- y
+  
+  # Add the calibrateWhich information
+  fit$calibrated <- calibrateWhich
+  
+  # return 'fit'object:
+  return(fit)
+}
+
+# After defining these 4 functions, we can get started with the actual calibration. 
+# For this we need to make some choices, e.g. which parameters to calibrate, and 
+# what are the transformations needed (no transformation, logarithmic transformation,
+# or logit transformation, see explanation in template 6). Because all parameters 
+# in this model should be positive, let’s use a log-transform in the calibration routine
+
+#Let’s calibrate only the parameters “Pload”,“Rmacr” and “D” of the GPLakeR model, 
+# based on the dataset dat and the measurements (and thus state) “sPmacr”. 
+
+# We only have to simulate to the maximum time of our dataset dat (thus max(dat$t)).
+# As initial state values we use the inits as defined above (the first row of dat).
+# Note that the calibration may take some time (several seconds/minutes) to complete:
+
+# Perform the calibration
+fit <- calibrateParameters(par = ParmsGPLakeR(),
+                           init = inits,
+                           fun = RatesGPLakeR,
+                           stateCol = "sPmacr",
+                           obs = dat$sPmacr,
+                           t = dat$time,
+                           times = seq(from=0, to = max(dat$time), by = 1),
+                           calibrateWhich = c("Pload","Rmacr","D"),
+                           transformations = c("log","log","log"))
+fit
+
+#Explanation of these outputs are given in the optimization function explanation of Template 6:
+
+# “par”: the calibrated parameter values. This includes all model parameters: 
+#those that are kept constant as well as those that have been calibrated;
+
+# “value”: this is the value of the cost-function at the values as given in “par”.
+# Here, this is thus the RMSE of the model predictions given the parameter values in “par”;
+
+#“counts”: information about the number of iterations that the optim function needed;
+
+#“convergence”: information about the convergence of the optim function: a value of
+# 0 means that the estimation successfully converged! For other values, see ?optim 
+#for the help-documentation of the optim function; ***************
+
+#“message”: a character string giving any additional information returned by the 
+#optimizer, or NULL;
+
+#“calibrated”: a character string with the model parameters that have been calibrated 
+#(thus the vector passed as input to argument calibrateWhich).
+
+# Fit the model using the calibrated values
+statesFitted <- ode(y = inits,
+                    times = seq(from=0, to = max(dat$time), by = 1),
+                    parms = fit$par,
+                    func = RatesGPLakeR,
+                    method = "ode45")
+plot(statesFitted)
+
+# Also, we can plot the modelled pattern of state “sPmacr” as function of time, 
+# including the measured values of “sPmacr”:
+
+par(mfrow= c(1,1))
+plot(statesFitted[,"time"], statesFitted[,"sPmacr"], type = "l", xlab = "Time", 
+     ylab = "State sPmacr")
+points(dat$time, dat$sPmacr, pch=16)
+
+par(mfrow= c(2,1))
+
+plot(states[,"time"], states[,"sPmacr"], type="l", xlab="Time", ylab="State sPmacr", 
+     ylim=c(0,250))
+points(dat$time, dat$sPmacr, pch=16)
+
+plot(statesFitted[,"time"], statesFitted[,"sPmacr"], type = "l", xlab = "Time", 
+     ylab = "State sPmacr")
+points(dat$time, dat$sPmacr, pch=16)
+
+
+# The parameters are much better calibrated. 
+# The calibrated model seems to capture the observed pattern quite well! 
+# In order to quantify the difference between the calibrated model and the model 
+# solved with default parameter values, let’s compute the RMSE for both models
+
+predRMSE(p = ParmsGPLakeR(),
+         y0 = inits,
+         fn = RatesGPLakeR,
+         name = "sPmacr",
+         obs_values = dat$sPmacr,
+         obs_times = dat$time,
+         out_time = seq(from = 0, to = max(dat$time), by = 1))
+
+predRMSE(p = fit$par,
+         y0 = inits,
+         fn = RatesGPLakeR,
+         name = "sPmacr",
+         obs_values = dat$sPmacr,
+         obs_times = dat$time,
+         out_time = seq(from = 0, to = max(dat$time), by = 1))
+
+# We see that the calibrated model has a RMSE that is about 50 times smaller than 
+# of that with the default parameters, thus: via calibration we have improved model fit!
